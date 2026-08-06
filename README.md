@@ -82,16 +82,17 @@ For local development, copy `.env.example` to `.env.local`, then set `NEXT_PUBLI
 
 ## Deploying to Vercel
 
-Deployment is intentionally left to the repository owner. To deploy later:
+The project is deployed on Vercel:
+
+https://baladi-eight.vercel.app
 
 1. Commit and push the repository to GitHub.
 2. In Vercel, choose **Add New Project** and import the GitHub repository.
-3. Set the Vercel **Root Directory** to `baladi`, where this app's `package.json` is located.
-4. Keep the detected Next.js framework preset and the default npm build settings.
-5. Add `NEXT_PUBLIC_APP_NAME` and `NEXT_PUBLIC_APP_URL` in the Vercel project environment settings. Set the URL to the deployed application URL when it is known.
-6. Trigger the deployment and review the build output before sharing the site.
+3. Leave the **Root Directory** as the repository root (`./`).
+4. Keep the detected Next.js framework preset and default npm build settings.
+5. Click **Deploy**.
 
-No deployment is performed as part of this foundation assignment.
+No environment variables are currently required for this foundation version.
 
 ## Future planned functionality
 
