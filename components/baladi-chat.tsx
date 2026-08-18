@@ -8,6 +8,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type FormEvent,
   type KeyboardEvent,
   type UIEvent,
@@ -17,14 +18,46 @@ const chatTransport = new DefaultChatTransport({ api: "/api/chat" });
 const NEAR_BOTTOM_PX = 80;
 const MAX_MESSAGE_CHARACTERS = 4_000;
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+const STREAM_REVEAL_INTERVAL_MS = 20;
+const MAX_COMPLETION_CHARACTERS_PER_TICK = 3;
+const QUICK_FLUSH_CHARACTER_THRESHOLD = 80;
+const MIN_REVEALED_CHARACTERS_FOR_QUICK_FLUSH = 40;
+const QUICK_FLUSH_TICKS = 10;
 const PENDING_ASSISTANT_MESSAGE = {
   id: "baladi-pending-assistant",
   role: "assistant",
   parts: [],
 } satisfies UIMessage;
 
+function getReducedMotionSnapshot(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(REDUCED_MOTION_QUERY).matches
+  );
+}
+
+function subscribeToReducedMotion(onStoreChange: () => void): () => void {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return () => undefined;
+  }
+
+  const mediaQuery = window.matchMedia(REDUCED_MOTION_QUERY);
+  mediaQuery.addEventListener("change", onStoreChange);
+
+  return () => mediaQuery.removeEventListener("change", onStoreChange);
+}
+
+function usePrefersReducedMotion(): boolean {
+  return useSyncExternalStore(
+    subscribeToReducedMotion,
+    getReducedMotionSnapshot,
+    () => false,
+  );
+}
+
 function getPreferredScrollBehavior(): ScrollBehavior {
-  return window.matchMedia(REDUCED_MOTION_QUERY).matches ? "auto" : "smooth";
+  return getReducedMotionSnapshot() ? "auto" : "smooth";
 }
 
 function getMessageRenderKey(
@@ -41,10 +74,179 @@ function getMessageRenderKey(
   return message.id;
 }
 
-function hasVisibleText(message: UIMessage) {
-  return message.parts.some(
-    (part) => part.type === "text" && part.text.length > 0,
+function getMessageText(message: UIMessage | undefined): string {
+  return (
+    message?.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("") ?? ""
   );
+}
+
+interface RevealState {
+  requestId: number | null;
+  revealedCharacters: number;
+}
+
+interface LatestAssistantSource {
+  requestId: number | null;
+  characters: string[];
+}
+
+interface RevealRequest {
+  id: number;
+  messageCountAtStart: number;
+}
+
+function useAssistantTextReveal(
+  message: UIMessage | undefined,
+  requestId: number | null,
+  isGenerating: boolean,
+  prefersReducedMotion: boolean,
+): string | undefined {
+  const sourceText = getMessageText(message);
+  const sourceCharacters = Array.from(sourceText);
+  const latestSourceRef = useRef<LatestAssistantSource>({
+    requestId,
+    characters: sourceCharacters,
+  });
+  const revealedRequestIdRef = useRef<number | null>(null);
+  const revealedCharactersRef = useRef(0);
+  const [revealState, setRevealState] = useState<RevealState>({
+    requestId: null,
+    revealedCharacters: 0,
+  });
+
+  useEffect(() => {
+    latestSourceRef.current = {
+      requestId,
+      characters: Array.from(sourceText),
+    };
+  }, [requestId, sourceText]);
+
+  const shouldReveal = message !== undefined && requestId !== null;
+
+  useEffect(() => {
+    if (!shouldReveal || requestId === null || !prefersReducedMotion) {
+      return;
+    }
+
+    const revealedCharacters = Array.from(sourceText).length;
+    revealedRequestIdRef.current = requestId;
+    revealedCharactersRef.current = revealedCharacters;
+    const timeoutId = window.setTimeout(() => {
+      setRevealState((currentState) => {
+        if (
+          currentState.requestId === requestId &&
+          currentState.revealedCharacters === revealedCharacters
+        ) {
+          return currentState;
+        }
+
+        return { requestId, revealedCharacters };
+      });
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [prefersReducedMotion, requestId, shouldReveal, sourceText]);
+
+  useEffect(() => {
+    if (!shouldReveal || requestId === null || prefersReducedMotion) {
+      return;
+    }
+
+    if (revealedRequestIdRef.current !== requestId) {
+      revealedRequestIdRef.current = requestId;
+      revealedCharactersRef.current = 0;
+    }
+
+    const intervalId = window.setInterval(() => {
+      const latestSource = latestSourceRef.current;
+
+      if (latestSource.requestId !== requestId) {
+        return;
+      }
+
+      const availableCharacters = latestSource.characters.length;
+      const currentCharacters = Math.min(
+        revealedCharactersRef.current,
+        availableCharacters,
+      );
+      revealedCharactersRef.current = currentCharacters;
+
+      if (currentCharacters >= availableCharacters) {
+        setRevealState((currentState) => {
+          if (
+            currentState.requestId === requestId &&
+            currentState.revealedCharacters === currentCharacters
+          ) {
+            return currentState;
+          }
+
+          return {
+            requestId,
+            revealedCharacters: currentCharacters,
+          };
+        });
+
+        if (!isGenerating) {
+          window.clearInterval(intervalId);
+        }
+        return;
+      }
+
+      const remainingCharacters = availableCharacters - currentCharacters;
+      const canQuickFlush =
+        currentCharacters >= MIN_REVEALED_CHARACTERS_FOR_QUICK_FLUSH &&
+        remainingCharacters <= QUICK_FLUSH_CHARACTER_THRESHOLD;
+      const charactersPerTick = isGenerating
+        ? 1
+        : canQuickFlush
+          ? Math.max(1, Math.ceil(remainingCharacters / QUICK_FLUSH_TICKS))
+          : remainingCharacters > QUICK_FLUSH_CHARACTER_THRESHOLD
+            ? MAX_COMPLETION_CHARACTERS_PER_TICK
+            : 1;
+      const nextCharacters = Math.min(
+        availableCharacters,
+        currentCharacters + charactersPerTick,
+      );
+      revealedCharactersRef.current = nextCharacters;
+      setRevealState((currentState) => {
+        if (
+          currentState.requestId === requestId &&
+          currentState.revealedCharacters === nextCharacters
+        ) {
+          return currentState;
+        }
+
+        return {
+          requestId,
+          revealedCharacters: nextCharacters,
+        };
+      });
+    }, STREAM_REVEAL_INTERVAL_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [isGenerating, prefersReducedMotion, requestId, shouldReveal]);
+
+  if (!shouldReveal) {
+    return undefined;
+  }
+
+  if (prefersReducedMotion) {
+    return sourceText;
+  }
+
+  const stateCharacters =
+    revealState.requestId === requestId
+      ? revealState.revealedCharacters
+      : 0;
+  const displayedCharacters = Math.min(
+    sourceCharacters.length,
+    stateCharacters,
+  );
+
+  return sourceCharacters.slice(0, displayedCharacters).join("");
 }
 
 function ThinkingIndicator() {
@@ -70,19 +272,28 @@ function ThinkingIndicator() {
 function MessageBubble({
   message,
   isLast,
-  isGenerating,
+  isAssistantActive,
   wasStopped,
+  revealedText,
 }: {
   message: UIMessage;
   isLast: boolean;
-  isGenerating: boolean;
+  isAssistantActive: boolean;
   wasStopped: boolean;
+  revealedText?: string;
 }) {
   const isUser = message.role === "user";
-  const textParts = message.parts.filter((part) => part.type === "text");
-  const hasText = hasVisibleText(message);
+  const textParts =
+    !isUser && revealedText !== undefined
+      ? revealedText.length > 0
+        ? [revealedText]
+        : []
+      : message.parts
+          .filter((part) => part.type === "text")
+          .map((part) => part.text);
+  const hasText = textParts.some((text) => text.length > 0);
   const showThinking =
-    !isUser && isLast && isGenerating && !hasText;
+    !isUser && isLast && isAssistantActive && !hasText;
 
   if (textParts.length === 0 && !showThinking) {
     return null;
@@ -110,17 +321,17 @@ function MessageBubble({
               className={`col-start-1 row-start-1 min-h-6 min-w-0 transition-opacity duration-200 ease-out motion-reduce:transition-none ${showThinking ? "opacity-0" : "opacity-100"}`}
               aria-hidden={showThinking}
             >
-              {textParts.map((part, index) => (
+              {textParts.map((text, index) => (
                 <p
                   key={`${message.id}-text-${index}`}
                   className="whitespace-pre-wrap break-words"
                   dir="auto"
                 >
-                  {part.text}
+                  {text}
                 </p>
               ))}
             </div>
-            {!isUser && isLast && isGenerating ? (
+            {!isUser && isLast && isAssistantActive ? (
               <div
                 className={`col-start-1 row-start-1 flex min-h-6 items-center transition-opacity duration-200 ease-out motion-reduce:transition-none ${showThinking ? "opacity-100" : "pointer-events-none opacity-0"}`}
                 aria-hidden={!showThinking}
@@ -142,11 +353,13 @@ export function BaladiChat() {
   const [input, setInput] = useState("");
   const [isFollowing, setIsFollowing] = useState(true);
   const [stoppedMessageId, setStoppedMessageId] = useState<string>();
+  const [revealRequest, setRevealRequest] = useState<RevealRequest>();
   const transcriptRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const followingRef = useRef(true);
   const previousScrollTopRef = useRef(0);
   const wasGeneratingRef = useRef(false);
+  const revealRequestIdRef = useRef(0);
 
   const {
     messages,
@@ -166,6 +379,24 @@ export function BaladiChat() {
 
   const isGenerating = status === "submitted" || status === "streaming";
   const lastMessage = messages.at(-1);
+  const lastAssistantMessage =
+    lastMessage?.role === "assistant" &&
+    revealRequest !== undefined &&
+    messages.length > revealRequest.messageCountAtStart
+      ? lastMessage
+      : undefined;
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const revealedAssistantText = useAssistantTextReveal(
+    lastAssistantMessage,
+    lastAssistantMessage ? revealRequest?.id ?? null : null,
+    isGenerating,
+    prefersReducedMotion,
+  );
+  const lastAssistantSourceText = getMessageText(lastAssistantMessage);
+  const isAssistantPresentationActive =
+    isGenerating ||
+    (revealedAssistantText !== undefined &&
+      revealedAssistantText !== lastAssistantSourceText);
   const showPendingAssistant =
     isGenerating && lastMessage?.role !== "assistant";
   const renderedMessages = showPendingAssistant
@@ -215,7 +446,7 @@ export function BaladiChat() {
     });
 
     return () => cancelAnimationFrame(frameId);
-  }, [messages, isGenerating]);
+  }, [messages, isGenerating, revealedAssistantText]);
 
   useEffect(() => {
     if (wasGeneratingRef.current && !isGenerating) {
@@ -258,6 +489,11 @@ export function BaladiChat() {
     clearError();
     setInput("");
     updateFollowing(true);
+    revealRequestIdRef.current += 1;
+    setRevealRequest({
+      id: revealRequestIdRef.current,
+      messageCountAtStart: messages.length,
+    });
     void sendMessage({ text });
     requestAnimationFrame(scrollToLatest);
   };
@@ -342,8 +578,13 @@ export function BaladiChat() {
                     key={getMessageRenderKey(renderedMessages, index)}
                     message={message}
                     isLast={index === renderedMessages.length - 1}
-                    isGenerating={isGenerating}
+                    isAssistantActive={isAssistantPresentationActive}
                     wasStopped={message.id === stoppedMessageId}
+                    revealedText={
+                      message.id === lastAssistantMessage?.id
+                        ? revealedAssistantText
+                        : undefined
+                    }
                   />
                 ))}
               </ol>
