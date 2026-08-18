@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { BaladiChat } from "@/components/baladi-chat";
+
 const mainRoutes = [
   { href: "/cities", label: "Browse cities" },
   { href: "/places", label: "Browse places" },
@@ -32,6 +34,8 @@ export default function HomePage() {
           Real reporting and management features will be built in later phases.
         </p>
       </div>
+
+      <BaladiChat />
 
       <nav aria-label="Foundation pages">
         <h2 className="mb-3 text-lg font-semibold">Explore the planned pages</h2>
