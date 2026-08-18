@@ -2,6 +2,7 @@ import {
   convertToModelMessages,
   createUIMessageStreamResponse,
   safeValidateUIMessages,
+  smoothStream,
   streamText,
   toUIMessageStream,
   type UIMessage,
@@ -105,13 +106,19 @@ export async function POST(request: Request) {
 
   try {
     const result = streamText({
-      ...baladiAIConfig,
-      messages: await convertToModelMessages(messages),
-      abortSignal: request.signal,
-      onError: ({ error }) => {
-        console.error("Baladi AI generation failed.", error);
-      },
-    });
+  ...baladiAIConfig,
+  messages: await convertToModelMessages(messages),
+  abortSignal: request.signal,
+
+  experimental_transform: smoothStream({
+    chunking: "word",
+    delayInMs: 50,
+  }),
+
+  onError: ({ error }) => {
+    console.error("Baladi AI generation failed.", error);
+  },
+});
 
     return createUIMessageStreamResponse({
       headers: { "Cache-Control": "no-cache, no-transform" },
