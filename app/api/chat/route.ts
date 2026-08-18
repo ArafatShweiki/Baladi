@@ -112,7 +112,7 @@ export async function POST(request: Request) {
 
   experimental_transform: smoothStream({
     chunking: "word",
-    delayInMs: 100,
+    delayInMs: 200,
   }),
 
   onError: ({ error }) => {
