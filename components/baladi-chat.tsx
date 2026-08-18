@@ -16,6 +16,30 @@ import {
 const chatTransport = new DefaultChatTransport({ api: "/api/chat" });
 const NEAR_BOTTOM_PX = 80;
 const MAX_MESSAGE_CHARACTERS = 4_000;
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+const PENDING_ASSISTANT_MESSAGE = {
+  id: "baladi-pending-assistant",
+  role: "assistant",
+  parts: [],
+} satisfies UIMessage;
+
+function getPreferredScrollBehavior(): ScrollBehavior {
+  return window.matchMedia(REDUCED_MOTION_QUERY).matches ? "auto" : "smooth";
+}
+
+function getMessageRenderKey(
+  messages: readonly UIMessage[],
+  index: number,
+): string {
+  const message = messages[index];
+  const previousMessage = messages[index - 1];
+
+  if (message.role === "assistant" && previousMessage?.role === "user") {
+    return `assistant-for-${previousMessage.id}`;
+  }
+
+  return message.id;
+}
 
 function hasVisibleText(message: UIMessage) {
   return message.parts.some(
@@ -56,15 +80,18 @@ function MessageBubble({
 }) {
   const isUser = message.role === "user";
   const textParts = message.parts.filter((part) => part.type === "text");
+  const hasText = hasVisibleText(message);
   const showThinking =
-    !isUser && isLast && isGenerating && !hasVisibleText(message);
+    !isUser && isLast && isGenerating && !hasText;
 
   if (textParts.length === 0 && !showThinking) {
     return null;
   }
 
   return (
-    <li className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+    <li
+      className={`chat-message-enter flex ${isUser ? "justify-end" : "justify-start"}`}
+    >
       <div className="max-w-[88%] space-y-1.5 sm:max-w-[78%]">
         <p
           className={`text-xs font-semibold ${isUser ? "text-right text-primary" : "text-muted"}`}
@@ -78,16 +105,30 @@ function MessageBubble({
               : "border border-border bg-subtle text-foreground"
           }`}
         >
-          {textParts.map((part, index) => (
-            <p
-              key={`${message.id}-text-${index}`}
-              className="whitespace-pre-wrap"
-              dir="auto"
+          <div className="grid min-h-6 min-w-0">
+            <div
+              className={`col-start-1 row-start-1 min-h-6 min-w-0 transition-opacity duration-200 ease-out motion-reduce:transition-none ${showThinking ? "opacity-0" : "opacity-100"}`}
+              aria-hidden={showThinking}
             >
-              {part.text}
-            </p>
-          ))}
-          {showThinking ? <ThinkingIndicator /> : null}
+              {textParts.map((part, index) => (
+                <p
+                  key={`${message.id}-text-${index}`}
+                  className="whitespace-pre-wrap break-words"
+                  dir="auto"
+                >
+                  {part.text}
+                </p>
+              ))}
+            </div>
+            {!isUser && isLast && isGenerating ? (
+              <div
+                className={`col-start-1 row-start-1 flex min-h-6 items-center transition-opacity duration-200 ease-out motion-reduce:transition-none ${showThinking ? "opacity-100" : "pointer-events-none opacity-0"}`}
+                aria-hidden={!showThinking}
+              >
+                <ThinkingIndicator />
+              </div>
+            ) : null}
+          </div>
         </div>
         {wasStopped ? (
           <p className="text-xs text-muted">Response stopped</p>
@@ -125,8 +166,11 @@ export function BaladiChat() {
 
   const isGenerating = status === "submitted" || status === "streaming";
   const lastMessage = messages.at(-1);
-  const showSeparateThinking =
+  const showPendingAssistant =
     isGenerating && lastMessage?.role !== "assistant";
+  const renderedMessages = showPendingAssistant
+    ? [...messages, PENDING_ASSISTANT_MESSAGE]
+    : messages;
 
   const updateFollowing = useCallback((nextValue: boolean) => {
     followingRef.current = nextValue;
@@ -141,7 +185,10 @@ export function BaladiChat() {
     }
 
     updateFollowing(true);
-    transcript.scrollTo({ top: transcript.scrollHeight, behavior: "auto" });
+    transcript.scrollTo({
+      top: transcript.scrollHeight,
+      behavior: getPreferredScrollBehavior(),
+    });
     previousScrollTopRef.current = transcript.scrollTop;
   }, [updateFollowing]);
 
@@ -150,12 +197,24 @@ export function BaladiChat() {
       return;
     }
 
-    const transcript = transcriptRef.current;
+    // Coalesce streamed text updates into one scroll request per frame. The
+    // existing following guard still lets manual upward scrolling take over.
+    const frameId = requestAnimationFrame(() => {
+      const transcript = transcriptRef.current;
 
-    if (transcript) {
-      transcript.scrollTop = transcript.scrollHeight;
-      previousScrollTopRef.current = transcript.scrollTop;
-    }
+      if (!transcript || !followingRef.current) {
+        return;
+      }
+
+      const behavior = getPreferredScrollBehavior();
+      transcript.scrollTo({ top: transcript.scrollHeight, behavior });
+
+      if (behavior === "auto") {
+        previousScrollTopRef.current = transcript.scrollTop;
+      }
+    });
+
+    return () => cancelAnimationFrame(frameId);
   }, [messages, isGenerating]);
 
   useEffect(() => {
@@ -278,27 +337,15 @@ export function BaladiChat() {
               </div>
             ) : (
               <ol className="space-y-4">
-                {messages.map((message, index) => (
+                {renderedMessages.map((message, index) => (
                   <MessageBubble
-                    key={message.id}
+                    key={getMessageRenderKey(renderedMessages, index)}
                     message={message}
-                    isLast={index === messages.length - 1}
+                    isLast={index === renderedMessages.length - 1}
                     isGenerating={isGenerating}
                     wasStopped={message.id === stoppedMessageId}
                   />
                 ))}
-                {showSeparateThinking ? (
-                  <li className="flex justify-start">
-                    <div className="max-w-[88%] space-y-1.5 sm:max-w-[78%]">
-                      <p className="text-xs font-semibold text-muted">
-                        Baladi AI
-                      </p>
-                      <div className="rounded-radius border border-border bg-subtle px-3.5 py-3 sm:px-4">
-                        <ThinkingIndicator />
-                      </div>
-                    </div>
-                  </li>
-                ) : null}
               </ol>
             )}
           </div>
@@ -351,23 +398,30 @@ export function BaladiChat() {
               aria-describedby="baladi-chat-help"
               className="min-h-12 min-w-0 flex-1 resize-none rounded-radius border border-border bg-background px-3 py-2.5 text-base leading-6 outline-none placeholder:text-muted focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 disabled:cursor-not-allowed disabled:bg-subtle disabled:opacity-70 sm:text-sm"
             />
-            {isGenerating ? (
-              <button
-                type="button"
-                onClick={() => void stop()}
-                className="min-h-12 shrink-0 rounded-radius border border-border bg-background px-4 py-2 text-sm font-semibold text-foreground hover:bg-subtle focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-primary"
-              >
-                Stop
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!input.trim()}
-                className="min-h-12 shrink-0 rounded-radius bg-primary px-4 py-2 text-sm font-semibold text-background hover:brightness-95 focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                Send
-              </button>
-            )}
+            <button
+              type={isGenerating ? "button" : "submit"}
+              onClick={isGenerating ? () => void stop() : undefined}
+              disabled={!isGenerating && !input.trim()}
+              aria-label={isGenerating ? "Stop response" : "Send message"}
+              className={`grid min-h-12 w-16 shrink-0 place-items-center overflow-hidden rounded-radius border px-3 py-2 text-sm font-semibold transition-[background-color,border-color,color,filter,opacity] duration-200 ease-out motion-reduce:transition-none ${
+                isGenerating
+                  ? "border-border bg-background text-foreground hover:bg-subtle"
+                  : "border-transparent bg-primary text-background hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-45"
+              } focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-primary`}
+            >
+              <span className="grid" aria-hidden="true">
+                <span
+                  className={`col-start-1 row-start-1 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${isGenerating ? "translate-y-1 opacity-0" : "translate-y-0 opacity-100"}`}
+                >
+                  Send
+                </span>
+                <span
+                  className={`col-start-1 row-start-1 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${isGenerating ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0"}`}
+                >
+                  Stop
+                </span>
+              </span>
+            </button>
           </div>
           <p id="baladi-chat-help" className="mt-2 text-xs text-muted">
             Enter to send · Shift + Enter for a new line

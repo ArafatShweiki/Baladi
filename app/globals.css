@@ -45,3 +45,25 @@ a:focus-visible {
   background: var(--primary);
   color: var(--background);
 }
+
+@keyframes baladi-message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-message-enter {
+  animation: baladi-message-enter 180ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-message-enter {
+    animation: none;
+  }
+}
