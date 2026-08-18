@@ -111,8 +111,8 @@ export async function POST(request: Request) {
   abortSignal: request.signal,
 
   experimental_transform: smoothStream({
-  chunking: "line",
-  delayInMs: 200,
+  chunking: /./,
+  delayInMs: 20,
 }),
 
   onError: ({ error }) => {
