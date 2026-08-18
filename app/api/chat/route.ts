@@ -111,9 +111,9 @@ export async function POST(request: Request) {
   abortSignal: request.signal,
 
   experimental_transform: smoothStream({
-    chunking: "word",
-    delayInMs: 200,
-  }),
+  chunking: "line",
+  delayInMs: 200,
+}),
 
   onError: ({ error }) => {
     console.error("Baladi AI generation failed.", error);
