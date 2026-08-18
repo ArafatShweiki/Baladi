@@ -11,6 +11,7 @@ Baladi (بلدي) is a future community issue-reporting platform intended to hel
 - TypeScript 5
 - Tailwind CSS 4
 - ESLint 9 with the Next.js configuration
+- Vercel AI SDK with Google Gemini
 - Server Components by default
 
 ## Routes
@@ -76,9 +77,10 @@ The tracked `.env.example` file contains safe placeholders only:
 ```dotenv
 NEXT_PUBLIC_APP_NAME=Baladi
 NEXT_PUBLIC_APP_URL=
+GOOGLE_GENERATIVE_AI_API_KEY=
 ```
 
-For local development, copy `.env.example` to `.env.local`, then set `NEXT_PUBLIC_APP_URL` to the appropriate application URL (for example, `http://localhost:3000`). Keep secrets out of variables prefixed with `NEXT_PUBLIC_`, because Next.js exposes those values to browser code. Private environment files are ignored by Git; do not commit real secrets.
+For local development, copy `.env.example` to `.env.local`, set `NEXT_PUBLIC_APP_URL` to the appropriate application URL (for example, `http://localhost:3000`), and set `GOOGLE_GENERATIVE_AI_API_KEY` to a Gemini API key created in Google AI Studio. The Gemini key is read only by the server-side `/api/chat` Route Handler; never rename it with a `NEXT_PUBLIC_` prefix. Private environment files are ignored by Git; do not commit real secrets.
 
 ## Deploying to Vercel
 
@@ -90,9 +92,8 @@ https://baladi-eight.vercel.app
 2. In Vercel, choose **Add New Project** and import the GitHub repository.
 3. Leave the **Root Directory** as the repository root (`./`).
 4. Keep the detected Next.js framework preset and default npm build settings.
-5. Click **Deploy**.
-
-No environment variables are currently required for this foundation version.
+5. Add `GOOGLE_GENERATIVE_AI_API_KEY` in the Vercel project's **Settings > Environment Variables** for each environment that should support Baladi AI.
+6. Click **Deploy**. Redeploy an existing deployment after adding or changing the key so the new environment value is available to the application.
 
 ## Future planned functionality
 

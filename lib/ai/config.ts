@@ -1,14 +1,14 @@
 import "server-only";
 
-import { anthropic } from "@ai-sdk/anthropic";
+import { google } from "@ai-sdk/google";
 
-const BALADI_MODEL_ID = "claude-sonnet-5";
+const BALADI_MODEL_ID = "gemini-3.6-flash";
 
 export const baladiAIConfig = {
-  model: anthropic(BALADI_MODEL_ID),
+  model: google(BALADI_MODEL_ID),
   maxOutputTokens: 500,
   // This lightweight guidance flow benefits from a fast first token more than
-  // hidden extended reasoning, which Sonnet 5 enables by default.
+  // extended reasoning. Gemini maps this setting to its minimal thinking level.
   reasoning: "none",
   instructions: `You are Baladi AI, an assistant for the Baladi community issue-reporting platform in Palestine.
 
